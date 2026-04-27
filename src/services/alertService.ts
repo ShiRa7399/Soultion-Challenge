@@ -16,7 +16,10 @@ function handleApiError(error: unknown, operationType: OperationType, path: stri
 export const fetchAlerts = async (): Promise<EmergencyAlert[]> => {
   try {
     const response = await fetch(API_BASE);
-    if (!response.ok) throw new Error('Failed to fetch alerts');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.details || errData.error || 'Failed to fetch alerts');
+    }
     return await response.json();
   } catch (error) {
     handleApiError(error, OperationType.LIST, API_BASE);
@@ -44,7 +47,10 @@ export const updateAlertStatus = async (alertId: string, status: AlertStatus) =>
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
     });
-    if (!response.ok) throw new Error('Failed to update alert');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.details || errData.error || 'Failed to update alert');
+    }
     return await response.json();
   } catch (error) {
     handleApiError(error, OperationType.UPDATE, `${API_BASE}/${alertId}`);
@@ -58,7 +64,10 @@ export const createDemoAlert = async (alert: Omit<EmergencyAlert, 'alertId' | 't
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(alert),
     });
-    if (!response.ok) throw new Error('Failed to create alert');
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.details || errData.error || 'Failed to create alert');
+    }
     return await response.json();
   } catch (error) {
     handleApiError(error, OperationType.CREATE, API_BASE);

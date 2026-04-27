@@ -53,7 +53,10 @@ async function startServer() {
       return { insertedId: _id };
     },
     updateOne: async (query: any, update: any) => {
-      const index = memoryStore.findIndex(item => item._id.toString() === query._id.toString());
+      const id = query._id?.toString() || query.alertId || (query.$or && (query.$or[0]._id?.toString() || query.$or[1]._id));
+      const index = memoryStore.findIndex(item => 
+        item._id.toString() === id || item.alertId === id
+      );
       if (index !== -1) {
         Object.assign(memoryStore[index], update.$set);
         return { matchedCount: 1 };
@@ -61,86 +64,116 @@ async function startServer() {
       return { matchedCount: 0 };
     },
     findOneAndUpdate: async (query: any, update: any) => {
-      const index = memoryStore.findIndex(item => item._id.toString() === query._id.toString());
+      const id = query._id?.toString() || query.alertId || (query.$or && (query.$or[0]._id?.toString() || query.$or[1]._id));
+      const index = memoryStore.findIndex(item => 
+        item._id.toString() === id || item.alertId === id
+      );
       if (index !== -1) {
         Object.assign(memoryStore[index], update.$set);
         return memoryStore[index];
       }
       return null;
+    },
+    findOne: async (query: any) => {
+      const id = query._id?.toString() || query.alertId || (query.$or && (query.$or[0]._id?.toString() || query.$or[1]._id));
+      return memoryStore.find(item => 
+        item._id.toString() === id || item.alertId === id
+      ) || null;
     }
   };
 
-  // Default to memory collection until MongoDB connects
+  // Ensure memory collection is used by default
   collection = memoryCollection;
 
   // Attempt MongoDB connection asynchronously
-  MongoClient.connect(MONGODB_URI, { serverSelectionTimeoutMS: 2000 })
+  const clientPromise = MongoClient.connect(MONGODB_URI, { serverSelectionTimeoutMS: 2000 })
     .then(client => {
       const db = client.db(DB_NAME);
       collection = db.collection('alerts');
       console.log('Successfully connected to MongoDB');
+      return client;
     })
     .catch(error => {
       console.error('MongoDB connection error. Staying with in-memory storage.', error.message);
+      return null;
     });
 
   // API Routes
   app.get('/api/alerts', async (req, res) => {
+    await clientPromise;
     try {
       const alerts = await collection.find().sort({ timestamp: -1 }).toArray();
-      res.json(alerts);
+      // Ensure every alert has an alertId string for the frontend
+      const mappedAlerts = alerts.map((a: any) => ({
+        ...a,
+        alertId: a.alertId || a._id.toString()
+      }));
+      res.json(mappedAlerts);
     } catch (error) {
       console.error('Error fetching alerts:', error);
-      res.status(500).json({ error: 'Failed to fetch alerts' });
+      res.status(500).json({ error: 'Failed to fetch alerts', details: error instanceof Error ? error.message : String(error) });
     }
   });
 
   app.post('/api/alerts', async (req, res) => {
+    await clientPromise;
     try {
       const alert = {
-        ...req.body,
+        name: req.body.name || 'Anonymous',
+        roomNumber: req.body.roomNumber || 'N/A',
+        organizationId: req.body.organizationId || 'GLOBAL',
+        type: req.body.type || 'Other',
         timestamp: new Date().toISOString(),
         status: req.body.status || 'Pending'
       };
-      const result = await collection.insertOne(alert);
-      const insertedAlert = { ...alert, alertId: result.insertedId.toString(), _id: result.insertedId };
       
+      const result = await collection.insertOne(alert);
+      const insertedAlert = { 
+        ...alert, 
+        _id: result.insertedId,
+        alertId: result.insertedId.toString() 
+      };
+      
+      // Update with alertId string for consistency in multi-user scenarios
       await collection.updateOne(
         { _id: result.insertedId },
         { $set: { alertId: result.insertedId.toString() } }
       );
 
-      io.emit('alert:created', insertedAlert);
+      if (io) io.emit('alert:created', insertedAlert);
       res.status(201).json(insertedAlert);
     } catch (error) {
       console.error('Create alert error:', error);
-      res.status(500).json({ error: 'Failed to create alert' });
+      res.status(500).json({ error: 'Failed to create alert', details: error instanceof Error ? error.message : String(error) });
     }
   });
 
   app.patch('/api/alerts/:id', async (req, res) => {
+    await clientPromise;
     try {
       const { id } = req.params;
       const { status } = req.body;
       
-      if (!ObjectId.isValid(id)) {
-        return res.status(400).json({ error: 'Invalid ID format' });
-      }
+      const query = ObjectId.isValid(id) 
+        ? { $or: [{ _id: new ObjectId(id) }, { _id: id }, { alertId: id }] }
+        : { $or: [{ _id: id }, { alertId: id }] };
 
-      const updatedAlert = await collection.findOneAndUpdate(
-        { _id: new ObjectId(id) },
-        { $set: { status } }
-      );
+      await collection.updateOne(query, { $set: { status } });
+      const updatedAlert = await collection.findOne(query);
       
       if (updatedAlert) {
-        io.emit('alert:updated', updatedAlert);
-        res.json(updatedAlert);
+        const mappedAlert = {
+          ...updatedAlert,
+          alertId: updatedAlert.alertId || updatedAlert._id.toString()
+        };
+        if (io) io.emit('alert:updated', mappedAlert);
+        res.json(mappedAlert);
       } else {
-        res.status(404).json({ error: 'Alert not found' });
+        res.status(404).json({ error: 'Alert not found', details: `No alert found with ID ${id} in current store` });
       }
     } catch (error) {
       console.error('Update alert error:', error);
-      res.status(500).json({ error: 'Failed to update alert' });
+      res.status(500).json({ error: 'Failed to update alert', details: error instanceof Error ? error.message : String(error) });
     }
   });
 

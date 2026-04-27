@@ -28,7 +28,10 @@ const memoryCollection = {
     return { insertedId: _id };
   },
   updateOne: async (query: any, update: any) => {
-    const index = memoryStore.findIndex(item => item._id.toString() === query._id.toString());
+    const id = query._id?.toString() || query.alertId || (query.$or && (query.$or[0]._id?.toString() || query.$or[1]._id));
+    const index = memoryStore.findIndex(item => 
+      item._id.toString() === id || item.alertId === id
+    );
     if (index !== -1) {
       Object.assign(memoryStore[index], update.$set);
       return { matchedCount: 1 };
@@ -36,12 +39,21 @@ const memoryCollection = {
     return { matchedCount: 0 };
   },
   findOneAndUpdate: async (query: any, update: any) => {
-    const index = memoryStore.findIndex(item => item._id.toString() === query._id.toString());
+    const id = query._id?.toString() || query.alertId || (query.$or && (query.$or[0]._id?.toString() || query.$or[1]._id));
+    const index = memoryStore.findIndex(item => 
+      item._id.toString() === id || item.alertId === id
+    );
     if (index !== -1) {
       Object.assign(memoryStore[index], update.$set);
       return memoryStore[index];
     }
     return null;
+  },
+  findOne: async (query: any) => {
+    const id = query._id?.toString() || query.alertId || (query.$or && (query.$or[0]._id?.toString() || query.$or[1]._id));
+    return memoryStore.find(item => 
+      item._id.toString() === id || item.alertId === id
+    ) || null;
   }
 };
 
@@ -64,9 +76,14 @@ app.get('/api/alerts', async (req, res) => {
   await clientPromise;
   try {
     const alerts = await collection.find().sort({ timestamp: -1 }).toArray();
-    res.json(alerts);
+    const mappedAlerts = alerts.map((a: any) => ({
+      ...a,
+      alertId: a.alertId || a._id.toString()
+    }));
+    res.json(mappedAlerts);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch alerts' });
+    console.error('Error fetching alerts:', error);
+    res.status(500).json({ error: 'Failed to fetch alerts', details: error instanceof Error ? error.message : String(error) });
   }
 });
 
@@ -74,12 +91,19 @@ app.post('/api/alerts', async (req, res) => {
   await clientPromise;
   try {
     const alert = {
-      ...req.body,
+      name: req.body.name || 'Anonymous',
+      roomNumber: req.body.roomNumber || 'N/A',
+      organizationId: req.body.organizationId || 'GLOBAL',
+      type: req.body.type || 'Other',
       timestamp: new Date().toISOString(),
       status: req.body.status || 'Pending'
     };
     const result = await collection.insertOne(alert);
-    const insertedAlert = { ...alert, alertId: result.insertedId.toString(), _id: result.insertedId };
+    const insertedAlert = { 
+      ...alert, 
+      _id: result.insertedId,
+      alertId: result.insertedId.toString() 
+    };
     
     await collection.updateOne(
       { _id: result.insertedId },
@@ -88,7 +112,8 @@ app.post('/api/alerts', async (req, res) => {
 
     res.status(201).json(insertedAlert);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to create alert' });
+    console.error('Create alert error:', error);
+    res.status(500).json({ error: 'Failed to create alert', details: error instanceof Error ? error.message : String(error) });
   }
 });
 
@@ -98,23 +123,30 @@ app.patch('/api/alerts/:id', async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
     
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).json({ error: 'Invalid ID format' });
-    }
+    const query = ObjectId.isValid(id) 
+      ? { $or: [{ _id: new ObjectId(id) }, { _id: id }, { alertId: id }] }
+      : { $or: [{ _id: id }, { alertId: id }] };
 
-    const updatedAlert = await collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: { status } }
-    );
+    await collection.updateOne(query, { $set: { status } });
+    const updatedAlert = await collection.findOne(query);
     
     if (updatedAlert) {
-      res.json(updatedAlert);
+      const mappedAlert = {
+        ...updatedAlert,
+        alertId: updatedAlert.alertId || updatedAlert._id.toString()
+      };
+      res.json(mappedAlert);
     } else {
-      res.status(404).json({ error: 'Alert not found' });
+      res.status(404).json({ error: 'Alert not found', details: `No alert found with ID ${id} in current store` });
     }
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update alert' });
+    console.error('Update alert error:', error);
+    res.status(500).json({ error: 'Failed to update alert', details: error instanceof Error ? error.message : String(error) });
   }
+});
+
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ error: `API route ${req.method} ${req.url} not found` });
 });
 
 export default app;
