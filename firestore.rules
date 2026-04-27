@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Helper for Alert Validation
+    function isValidAlert(data) {
+      return data.keys().hasAll(['alertId', 'name', 'roomNumber', 'organizationId', 'type', 'status', 'timestamp']) &&
+             data.keys().size() == 7 &&
+             isValidId(data.alertId) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.roomNumber is string && data.roomNumber.size() > 0 && data.roomNumber.size() <= 20 &&
+             data.organizationId is string && data.organizationId.size() > 0 && data.organizationId.size() <= 50 &&
+             data.type in ['Fire', 'Medical', 'Lift', 'Security', 'Other'] &&
+             data.status in ['Pending', 'In Progress', 'Resolved'] &&
+             data.timestamp is string; // Using string ISO format as per blueprint
+    }
+
+    // --- Alerts Collection ---
+    match /alerts/{alertId} {
+      // Identity Poisoning Guard
+      allow get: if isSignedIn() && isValidId(alertId);
+      
+      // Secure List Queries
+      allow list: if isSignedIn(); 
+
+      // Create: Only if valid schema
+      allow create: if isSignedIn() && isValidAlert(incoming()) && incoming().alertId == alertId;
+      
+      // Update: Action-based updates
+      allow update: if isSignedIn() && (
+        // Action: Update Status
+        (isValidAlert(incoming()) &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
+         existing().status != 'Resolved') // Prevent updates once resolved
+      );
+
+      // Delete: Generally not allowed for audit trail, but maybe admin?
+      allow delete: if false;
+    }
+  }
+}

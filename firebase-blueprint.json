@@ -1,0 +1,31 @@
+{
+  "entities": {
+    "Alert": {
+      "title": "Emergency Alert",
+      "description": "An emergency signal raised by a guest.",
+      "type": "object",
+      "properties": {
+        "alertId": { "type": "string" },
+        "name": { "type": "string" },
+        "roomNumber": { "type": "string" },
+        "organizationId": { "type": "string" },
+        "type": { 
+          "type": "string",
+          "enum": ["Fire", "Medical", "Lift", "Security", "Other"]
+        },
+        "status": { 
+          "type": "string",
+          "enum": ["Pending", "In Progress", "Resolved"]
+        },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["alertId", "name", "roomNumber", "organizationId", "type", "status", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "Collection of emergency alerts."
+    }
+  }
+}
