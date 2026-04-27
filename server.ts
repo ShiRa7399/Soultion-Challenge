@@ -30,10 +30,15 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  let db: any;
+  // Logging middleware for API
+  app.use('/api', (req, res, next) => {
+    console.log(`${req.method} ${req.path}`);
+    next();
+  });
+
   let collection: any;
 
-  // In-memory fallback for when MongoDB is not available
+  // In-memory fallback
   const memoryStore: any[] = [];
   const memoryCollection = {
     find: () => ({
@@ -65,15 +70,19 @@ async function startServer() {
     }
   };
 
-  try {
-    const client = await MongoClient.connect(MONGODB_URI, { serverSelectionTimeoutMS: 2000 });
-    db = client.db(DB_NAME);
-    collection = db.collection('alerts');
-    console.log('Connected to MongoDB');
-  } catch (error) {
-    console.error('MongoDB connection error. Falling back to in-memory storage.', error);
-    collection = memoryCollection;
-  }
+  // Default to memory collection until MongoDB connects
+  collection = memoryCollection;
+
+  // Attempt MongoDB connection asynchronously
+  MongoClient.connect(MONGODB_URI, { serverSelectionTimeoutMS: 2000 })
+    .then(client => {
+      const db = client.db(DB_NAME);
+      collection = db.collection('alerts');
+      console.log('Successfully connected to MongoDB');
+    })
+    .catch(error => {
+      console.error('MongoDB connection error. Staying with in-memory storage.', error.message);
+    });
 
   // API Routes
   app.get('/api/alerts', async (req, res) => {
@@ -81,6 +90,7 @@ async function startServer() {
       const alerts = await collection.find().sort({ timestamp: -1 }).toArray();
       res.json(alerts);
     } catch (error) {
+      console.error('Error fetching alerts:', error);
       res.status(500).json({ error: 'Failed to fetch alerts' });
     }
   });
@@ -95,7 +105,6 @@ async function startServer() {
       const result = await collection.insertOne(alert);
       const insertedAlert = { ...alert, alertId: result.insertedId.toString(), _id: result.insertedId };
       
-      // Ensure alertId is set correctly
       await collection.updateOne(
         { _id: result.insertedId },
         { $set: { alertId: result.insertedId.toString() } }
@@ -113,6 +122,11 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { status } = req.body;
+      
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ error: 'Invalid ID format' });
+      }
+
       const updatedAlert = await collection.findOneAndUpdate(
         { _id: new ObjectId(id) },
         { $set: { status } }
@@ -128,6 +142,11 @@ async function startServer() {
       console.error('Update alert error:', error);
       res.status(500).json({ error: 'Failed to update alert' });
     }
+  });
+
+  // API 404 Handler - MUST be before Vite/Static fallback
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ error: `API route ${req.method} ${req.url} not found` });
   });
 
   // Vite middleware for development

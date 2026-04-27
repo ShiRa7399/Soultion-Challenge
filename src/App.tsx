@@ -21,33 +21,63 @@ export default function App() {
     fetchAlerts().then(setAlerts);
   }, []);
 
-  // Socket Subscription
+  // Socket Subscription & Polling Fallback
   useEffect(() => {
     const handleCreated = (newAlert: EmergencyAlert) => {
-      setAlerts(prev => [newAlert, ...prev]);
-      setNewAlertIds(prev => new Set([...prev, newAlert.alertId]));
-      
-      // Play sound
-      if (audioRef.current) {
-        audioRef.current.play().catch(e => console.log('Audio play failed', e));
-      }
+      setAlerts(prev => {
+        // Prevent duplicate alerts if polling and sockets both work
+        if (prev.find(a => a.alertId === newAlert.alertId)) return prev;
+        
+        // Trigger sound/highlight for new alert
+        setNewAlertIds(prevIds => new Set([...prevIds, newAlert.alertId]));
+        if (audioRef.current) {
+          audioRef.current.play().catch(e => console.log('Audio play failed', e));
+        }
 
-      // Remove highlight after 10 seconds
-      setTimeout(() => {
-        setNewAlertIds(prev => {
-          const next = new Set(prev);
-          next.delete(newAlert.alertId);
-          return next;
-        });
-      }, 10000);
+        setTimeout(() => {
+          setNewAlertIds(prevIds => {
+            const next = new Set(prevIds);
+            next.delete(newAlert.alertId);
+            return next;
+          });
+        }, 10000);
+
+        return [newAlert, ...prev];
+      });
     };
 
     const handleUpdated = (updatedAlert: EmergencyAlert) => {
       setAlerts(prev => prev.map(a => a.alertId === updatedAlert.alertId ? updatedAlert : a));
     };
 
+    // 1. Subscribe to real-time sockets
     const unsubscribe = subscribeToAlertUpdates(handleCreated, handleUpdated);
-    return () => unsubscribe();
+
+    // 2. Polling Fallback (Essential for Vercel/Serverless)
+    // We poll every 5 seconds to catch updates if WebSockets aren't supported
+    const pollInterval = setInterval(async () => {
+      try {
+        const freshAlerts = await fetchAlerts();
+        setAlerts(currentAlerts => {
+          // Check if any truly new alerts arrived via polling
+          const currentIds = new Set(currentAlerts.map(a => a.alertId));
+          const brandNew = freshAlerts.filter(a => !currentIds.has(a.alertId));
+          
+          if (brandNew.length > 0) {
+            brandNew.forEach(handleCreated);
+          }
+          
+          return freshAlerts;
+        });
+      } catch (e) {
+        console.error('Polling failed', e);
+      }
+    }, 5000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(pollInterval);
+    };
   }, []);
 
   const filteredAlerts = alerts
