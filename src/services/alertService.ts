@@ -1,69 +1,66 @@
-import { 
-  collection, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  updateDoc, 
-  doc, 
-  setDoc,
-  serverTimestamp 
-} from 'firebase/firestore';
-import { db, auth } from '../firebase/config';
 import { EmergencyAlert, AlertStatus, OperationType } from '../types';
+import { socket } from '../lib/socket';
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+const API_BASE = '/api/alerts';
+
+function handleApiError(error: unknown, operationType: OperationType, path: string | null) {
   const errInfo = {
     error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-    },
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error('API Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
-export const subscribeToAlerts = (callback: (alerts: EmergencyAlert[]) => void) => {
-  const alertsRef = collection(db, 'alerts');
-  const q = query(alertsRef, orderBy('timestamp', 'desc'));
-
-  return onSnapshot(q, (snapshot) => {
-    const alerts = snapshot.docs.map(doc => ({
-      ...doc.data(),
-      alertId: doc.id
-    } as EmergencyAlert));
-    callback(alerts);
-  }, (error) => {
-    handleFirestoreError(error, OperationType.LIST, 'alerts');
-  });
-};
-
-export const updateAlertStatus = async (alertId: string, status: AlertStatus) => {
-  const alertRef = doc(db, 'alerts', alertId);
+export const fetchAlerts = async (): Promise<EmergencyAlert[]> => {
   try {
-    await updateDoc(alertRef, { status });
+    const response = await fetch(API_BASE);
+    if (!response.ok) throw new Error('Failed to fetch alerts');
+    return await response.json();
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `alerts/${alertId}`);
+    handleApiError(error, OperationType.LIST, API_BASE);
+    return [];
   }
 };
 
-// For testing purposes (adding an alert)
-export const createDemoAlert = async (alert: Omit<EmergencyAlert, 'alertId' | 'timestamp'>) => {
-  const alertId = `alert-${Date.now()}`;
-  const alertRef = doc(db, 'alerts', alertId);
-  const newAlert = {
-    ...alert,
-    alertId,
-    timestamp: new Date().toISOString()
+export const subscribeToAlertUpdates = (
+  onCreated: (alert: EmergencyAlert) => void,
+  onUpdated: (alert: EmergencyAlert) => void
+) => {
+  socket.on('alert:created', onCreated);
+  socket.on('alert:updated', onUpdated);
+
+  return () => {
+    socket.off('alert:created', onCreated);
+    socket.off('alert:updated', onUpdated);
   };
-  
+};
+
+export const updateAlertStatus = async (alertId: string, status: AlertStatus) => {
   try {
-    await setDoc(alertRef, newAlert);
-    return alertId;
+    const response = await fetch(`${API_BASE}/${alertId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    if (!response.ok) throw new Error('Failed to update alert');
+    return await response.json();
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `alerts/${alertId}`);
+    handleApiError(error, OperationType.UPDATE, `${API_BASE}/${alertId}`);
+  }
+};
+
+export const createDemoAlert = async (alert: Omit<EmergencyAlert, 'alertId' | 'timestamp'>) => {
+  try {
+    const response = await fetch(API_BASE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(alert),
+    });
+    if (!response.ok) throw new Error('Failed to create alert');
+    return await response.json();
+  } catch (error) {
+    handleApiError(error, OperationType.CREATE, API_BASE);
   }
 };

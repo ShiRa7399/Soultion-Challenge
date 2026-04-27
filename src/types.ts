@@ -20,13 +20,8 @@ export enum OperationType {
   WRITE = 'write',
 }
 
-export interface FirestoreErrorInfo {
+export interface EmergencyErrorInfo {
   error: string;
   operationType: OperationType;
   path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-  }
 }

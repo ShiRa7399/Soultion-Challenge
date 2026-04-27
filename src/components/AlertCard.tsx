@@ -4,6 +4,7 @@ import { Shield, Flame, Activity, Box, MoreHorizontal, Clock, MapPin, User } fro
 import { formatDistanceToNow } from 'date-fns';
 
 interface AlertCardProps {
+  key?: string | number;
   alert: EmergencyAlert;
   onUpdateStatus: (alertId: string, status: AlertStatus) => void | Promise<void>;
   isNew?: boolean;

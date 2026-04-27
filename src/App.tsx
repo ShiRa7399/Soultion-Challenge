@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { subscribeToAlerts, updateAlertStatus, createDemoAlert } from './services/alertService';
+import { fetchAlerts, subscribeToAlertUpdates, updateAlertStatus, createDemoAlert } from './services/alertService';
 import { EmergencyAlert, AlertStatus, EmergencyType } from './types';
 import Navbar from './components/Navbar';
 import Sidebar from './components/Sidebar';
 import AlertCard from './components/AlertCard';
 import StatsGrid from './components/StatsGrid';
-import { Filter, Play, Plus, X, CheckCircle2 } from 'lucide-react';
+import { Filter, Plus, X, CheckCircle2 } from 'lucide-react';
 
 export default function App() {
   const [alerts, setAlerts] = useState<EmergencyAlert[]>([]);
@@ -15,39 +15,40 @@ export default function App() {
   const [newAlertIds, setNewAlertIds] = useState<Set<string>>(new Set());
   
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const prevAlertCount = useRef(0);
 
+  // Initial Fetch
   useEffect(() => {
-    const unsubscribe = subscribeToAlerts((updatedAlerts) => {
-      // Check for new alerts to trigger sound and animation
-      if (updatedAlerts.length > prevAlertCount.current) {
-        const freshlyAdded = updatedAlerts
-          .filter(a => !alerts.find(old => old.alertId === a.alertId))
-          .map(a => a.alertId);
-        
-        if (freshlyAdded.length > 0) {
-          setNewAlertIds(prev => new Set([...prev, ...freshlyAdded]));
-          // Play sound
-          if (audioRef.current) {
-            audioRef.current.play().catch(e => console.log('Audio play failed', e));
-          }
-          // Remove highlight after 10 seconds
-          setTimeout(() => {
-            setNewAlertIds(prev => {
-              const next = new Set(prev);
-              freshlyAdded.forEach(id => next.delete(id));
-              return next;
-            });
-          }, 10000);
-        }
-      }
-      
-      prevAlertCount.current = updatedAlerts.length;
-      setAlerts(updatedAlerts);
-    });
+    fetchAlerts().then(setAlerts);
+  }, []);
 
+  // Socket Subscription
+  useEffect(() => {
+    const handleCreated = (newAlert: EmergencyAlert) => {
+      setAlerts(prev => [newAlert, ...prev]);
+      setNewAlertIds(prev => new Set([...prev, newAlert.alertId]));
+      
+      // Play sound
+      if (audioRef.current) {
+        audioRef.current.play().catch(e => console.log('Audio play failed', e));
+      }
+
+      // Remove highlight after 10 seconds
+      setTimeout(() => {
+        setNewAlertIds(prev => {
+          const next = new Set(prev);
+          next.delete(newAlert.alertId);
+          return next;
+        });
+      }, 10000);
+    };
+
+    const handleUpdated = (updatedAlert: EmergencyAlert) => {
+      setAlerts(prev => prev.map(a => a.alertId === updatedAlert.alertId ? updatedAlert : a));
+    };
+
+    const unsubscribe = subscribeToAlertUpdates(handleCreated, handleUpdated);
     return () => unsubscribe();
-  }, [alerts]);
+  }, []);
 
   const filteredAlerts = alerts
     .filter(a => {
@@ -61,7 +62,9 @@ export default function App() {
       // High priority (Fire) always at top if pending/in progress
       if ((a.type === 'Fire' && a.status !== 'Resolved') && (b.type !== 'Fire' || b.status === 'Resolved')) return -1;
       if ((b.type === 'Fire' && b.status !== 'Resolved') && (a.type !== 'Fire' || a.status === 'Resolved')) return 1;
-      return 0; // Otherwise use default sorting from service (timestamp)
+      
+      // Secondary sort by timestamp
+      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
     });
 
   const handleAddDemo = () => {
